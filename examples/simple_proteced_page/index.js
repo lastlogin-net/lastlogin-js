@@ -1,79 +1,19 @@
 import * as decentauth from '../../index.js';
-import { argv } from 'node:process';
+import { serve } from '@anderspitman/fetch-handler';
 
-
-const adminId = argv[2];
-const port = argv[3] ? argv[3] : 3000;
 
 const authPrefix = '/auth';
 
-
-function html(session, returnTarget) {
-
-  let content;
-  if (session) {
-    content = `<h1>Hi there ${session.id}</h1>\n<a href='${authPrefix}/logout?return_target=${returnTarget}'>Logout</a>`;
-  }
-  else {
-    content = `<h1>Hi there</h1>\n<a href='${authPrefix}?return_target=${returnTarget}'>Login</a>`;
-  }
-
-  return `
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-        <style>
-          body {
-            font-family: Arial;
-            font-size: 1.2em;
-            display: flex;
-            justify-content: center;
-          }
-
-          .content {
-            width: 640px;
-          }
-        </style>
-      </head>
-      <body>
-        <main class='content'>
-          ${content}
-        </main>
-      </body>
-    </html>
-  `;
-}
-
-//const kvStore = new decentauth.JsonKvStore({
-//  path: 'db.json',
-//});
-
-const kvStore = new decentauth.SqliteKvStore({
-  path: './db.sqlite',
-});
-
-await kvStore.ready;
-
-const server = new decentauth.Server({
-  port,
-  kvStore,
+const authServer = new decentauth.Server({
   config: {
-    admin_id: adminId,
+    admin_id: "admin@example.com",
     path_prefix: authPrefix,
+    behind_proxy: true,
     login_methods: [
       {
         type: decentauth.LOGIN_METHOD_OIDC,
         name: "LastLogin",
         uri: "https://lastlogin.net",
-      },
-      {
-        type: decentauth.LOGIN_METHOD_ATPROTO,
-      },
-      {
-        type: decentauth.LOGIN_METHOD_FEDIVERSE,
       },
       {
         type: decentauth.LOGIN_METHOD_ADMIN_CODE,
@@ -82,28 +22,32 @@ const server = new decentauth.Server({
   },
 });
 
-const handler = async (req, ctx) => {
+const handler = async (req) => {
   const url = new URL(req.url);
 
-  const remoteAddr = req.headers.get('X-Forwarded-For');
+  console.log(url);
 
-  const ts = new Date().toISOString();
-  console.log(`${ts}\t${req.method}\t${remoteAddr}\t${url.host}\t${url.pathname}`);
+  const host = req.headers.get('X-Forwarded-Host');
+  const proto = req.headers.get('X-Forwarded-Proto');
 
-  const session = ctx.session;
+  if (url.pathname.startsWith(authPrefix)) {
+    return authServer.handle(req);
+  }
 
-  return new Response(html(session, url.pathname),{
+  const session = await authServer.getSession(req);
+
+  if (!session) {
+    const returnTarget = encodeURIComponent(`${url.pathname}${url.search}`);
+    const redirUrl = `${proto}://${host}${authPrefix}?return_target=${returnTarget}`;
+    console.log(redirUrl);
+    return Response.redirect(redirUrl);
+  }
+
+  return new Response('<h1>Secret page</h1>',{
     headers: {
       'Content-Type': 'text/html',
     },
   });
-
 };
 
-server.serve(handler);
-
-//Deno.serve({ port: 3000}, handler);
-//Bun.serve({
-//  port: 3000,
-//  fetch: handler,
-//});
+serve({ handler, port: 3000 });
